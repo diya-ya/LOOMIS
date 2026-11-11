@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { computeFacialDivisions } from './facialDivisions';
 import { computeCenterline } from './centerline';
 import { computeVerticalSubdivisions } from '../loomis/verticalSubdivisions';
-import type { FacePose, Landmark } from '@/types';
+import type { FacePose, Landmark, LandmarkId } from '@/types';
 import { fitImageToCanvas } from '../image/imageFitting';
 import { mid } from './helpers';
+import { lineAngleDeg } from './faceFrame';
 
 const pose: FacePose = {
   yaw: 0,
@@ -13,7 +14,7 @@ const pose: FacePose = {
   classification: 'frontal',
 };
 
-function lm(id: Landmark['id'], x: number, y: number): Landmark {
+function lm(id: LandmarkId, x: number, y: number): Landmark {
   return { id, x, y, confidence: 0.95 };
 }
 
@@ -28,8 +29,11 @@ const landmarks: Landmark[] = [
   lm('rightCheek', 0.72, 0.55),
   lm('leftEyeOuter', 0.35, 0.42),
   lm('rightEyeOuter', 0.65, 0.42),
+  lm('leftEyeInner', 0.42, 0.42),
+  lm('rightEyeInner', 0.58, 0.42),
   lm('noseBridge', 0.5, 0.48),
   lm('noseTip', 0.5, 0.55),
+  lm('forehead', 0.5, 0.22),
 ];
 
 describe('facial divisions', () => {
@@ -43,18 +47,25 @@ describe('facial divisions', () => {
     expect(div.chin.id).toBe('div-D');
   });
 
+  it('keeps upright divisions horizontal', () => {
+    const image = { width: 1000, height: 1200 };
+    const fit = fitImageToCanvas(image, { width: 30, height: 40 });
+    const div = computeFacialDivisions(landmarks, pose, image, fit, 10);
+    expect(Math.abs(lineAngleDeg(div.brow.start, div.brow.end))).toBeLessThan(0.5);
+  });
+
   it('tilts centerline with roll', () => {
     const image = { width: 1000, height: 1200 };
     const fit = fitImageToCanvas(image, { width: 30, height: 40 });
     const tilted: FacePose = { ...pose, roll: 20 };
     const line = computeCenterline(landmarks, tilted, image, fit);
-    const dx = line.end.x - line.start.x;
-    const dy = line.end.y - line.start.y;
-    const angle = (Math.atan2(dx, dy) * 180) / Math.PI;
-    expect(Math.abs(angle)).toBeGreaterThan(5);
+    const angle = lineAngleDeg(line.start, line.end);
+    // Down axis at 20° roll → centerline ≈ 110° from +X (or -70)
+    const fromVertical = Math.min(Math.abs(angle - 110), Math.abs(angle + 70));
+    expect(fromVertical).toBeLessThan(3);
   });
 
-  it('generates four vertical subdivisions', () => {
+  it('generates four parallel vertical subdivisions', () => {
     const image = { width: 1000, height: 1200 };
     const fit = fitImageToCanvas(image, { width: 30, height: 40 });
     const div = computeFacialDivisions(landmarks, pose, image, fit, 10);
@@ -69,5 +80,9 @@ describe('facial divisions', () => {
       bottom,
     );
     expect(verts.lines).toHaveLength(4);
+    const angles = verts.lines.map((l) => lineAngleDeg(l.start, l.end));
+    for (let i = 1; i < angles.length; i++) {
+      expect(Math.abs(angles[i] - angles[0])).toBeLessThan(0.5);
+    }
   });
 });

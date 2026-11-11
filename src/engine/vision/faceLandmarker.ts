@@ -3,14 +3,19 @@ import {
   FilesetResolver,
   type FaceLandmarkerResult,
 } from '@mediapipe/tasks-vision';
-import type { DetectedFace } from '@/types';
+import type { DetectedFace, FacePose } from '@/types';
 import {
   boundingBoxFromRaw,
   mapMediaPipeLandmarks,
   rawToPoints,
+  MP,
 } from './landmarkMapping';
-import { poseFromLandmarks, poseFromMatrix } from './orientationEstimator';
-import { MP } from './landmarkMapping';
+import {
+  combineOrientation,
+  estimateOrientationFromLandmarks,
+  poseFromMatrix,
+  type OrientationEstimate,
+} from './orientationEstimator';
 
 const WASM_CDN =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm';
@@ -34,7 +39,6 @@ export async function getFaceLandmarker(): Promise<FaceLandmarker> {
         outputFacialTransformationMatrixes: true,
       });
     })().catch(async (err) => {
-      // Retry with CPU if GPU fails
       console.warn('FaceLandmarker GPU init failed, retrying CPU', err);
       const vision = await FilesetResolver.forVisionTasks(WASM_CDN);
       return FaceLandmarker.createFromOptions(vision, {
@@ -51,6 +55,14 @@ export async function getFaceLandmarker(): Promise<FaceLandmarker> {
   return landmarkerPromise;
 }
 
+function avg(a: { x: number; y: number }, b: { x: number; y: number }) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function orientationToPose(est: OrientationEstimate): FacePose & OrientationEstimate {
+  return est;
+}
+
 function resultToFaces(result: FaceLandmarkerResult): DetectedFace[] {
   const faces: DetectedFace[] = [];
   const count = result.faceLandmarks?.length ?? 0;
@@ -61,30 +73,48 @@ function resultToFaces(result: FaceLandmarkerResult): DetectedFace[] {
 
     const landmarks = mapMediaPipeLandmarks(raw, 0.9);
     const box = boundingBoxFromRaw(raw);
+    const get = (idx: number) => ({ x: raw[idx].x, y: raw[idx].y });
 
-    let pose;
+    // Always estimate robust landmark-based orientation (especially roll)
+    const landmarkPose = estimateOrientationFromLandmarks({
+      leftEyeOuter: get(MP.leftEyeOuter),
+      leftEyeInner: get(MP.leftEyeInner),
+      rightEyeInner: get(MP.rightEyeInner),
+      rightEyeOuter: get(MP.rightEyeOuter),
+      leftBrow: avg(get(MP.leftBrowInner), get(MP.leftBrowOuter)),
+      rightBrow: avg(get(MP.rightBrowInner), get(MP.rightBrowOuter)),
+      mouthLeft: get(MP.leftMouth),
+      mouthRight: get(MP.rightMouth),
+      noseTip: get(MP.noseTip),
+      noseBridge: get(MP.noseBridge),
+      chin: get(MP.chin),
+      forehead: get(MP.foreheadTop),
+      leftCheek: get(MP.leftCheek),
+      rightCheek: get(MP.rightCheek),
+    });
+
     const matrix = result.facialTransformationMatrixes?.[i];
-    if (matrix?.data && matrix.data.length >= 16) {
-      pose = poseFromMatrix(matrix.data);
-    } else {
-      const get = (idx: number) => ({ x: raw[idx].x, y: raw[idx].y });
-      pose = poseFromLandmarks({
-        leftEye: get(MP.leftEyeOuter),
-        rightEye: get(MP.rightEyeOuter),
-        noseTip: get(MP.noseTip),
-        mouthLeft: get(MP.leftMouth),
-        mouthRight: get(MP.rightMouth),
-        chin: get(MP.chin),
-        forehead: get(MP.foreheadTop),
-      });
-    }
+    const matrixPose =
+      matrix?.data && matrix.data.length >= 16
+        ? poseFromMatrix(matrix.data)
+        : null;
+
+    // Landmark roll + matrix yaw/pitch (when available)
+    const combined = combineOrientation(landmarkPose, matrixPose);
+    const pose = orientationToPose(combined);
+
+    const overallConfidence = Math.min(
+      0.95,
+      (combined.rollConfidence + combined.yawConfidence + combined.pitchConfidence) /
+        3,
+    );
 
     faces.push({
       id: `face-${i}`,
       landmarks,
       rawLandmarks: rawToPoints(raw),
       pose,
-      confidence: 0.9,
+      confidence: overallConfidence,
       boundingBox: box,
     });
   }

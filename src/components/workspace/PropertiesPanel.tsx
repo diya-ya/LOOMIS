@@ -92,9 +92,25 @@ export function PropertiesPanel({ onExport }: { onExport: () => void }) {
                 <span>Yaw / Pitch / Roll</span>
                 <span className="tabular-nums text-[var(--color-text)]">
                   {face.pose.yaw.toFixed(0)}° / {face.pose.pitch.toFixed(0)}° /{' '}
-                  {face.pose.roll.toFixed(0)}°
+                  {face.pose.roll.toFixed(1)}°
                 </span>
               </div>
+              {face.pose.rawRoll !== undefined && (
+                <div className="flex justify-between text-[var(--color-text-secondary)]">
+                  <span>Raw roll → applied</span>
+                  <span className="tabular-nums text-[var(--color-text)]">
+                    {face.pose.rawRoll.toFixed(1)}° → {face.pose.roll.toFixed(1)}°
+                  </span>
+                </div>
+              )}
+              {face.pose.rollConfidence !== undefined && (
+                <div className="flex justify-between text-[var(--color-text-secondary)]">
+                  <span>Roll confidence</span>
+                  <span className="text-[var(--color-text)]">
+                    {(face.pose.rollConfidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between text-[var(--color-text-secondary)]">
                 <span>Confidence</span>
                 <span className="text-[var(--color-text)]">

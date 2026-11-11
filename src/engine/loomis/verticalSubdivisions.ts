@@ -6,19 +6,19 @@ import type {
   VerticalSubdivisionsGeometry,
   Point2D,
 } from '@/types';
-import {
-  faceAcrossAxis,
-  faceDownAxis,
-  requireLm,
-  add,
-  scale,
-} from '@/engine/geometry/helpers';
+import { requireLm } from '@/engine/geometry/helpers';
 import { normalizedToCanvas } from '@/engine/image/imageTransform';
+import {
+  buildFaceFrame,
+  toLocal,
+  verticalLineFromFrame,
+  type FaceFrame,
+} from '@/engine/geometry/faceFrame';
+import { DEFAULT_ORIENTATION_CONFIG } from '@/engine/vision/orientationConfig';
 
 /**
  * Five proportional eye-width units across the facial plane.
- * Uses projected facial plane for rotated faces rather than equal
- * horizontal spacing in screen coordinates.
+ * Verticals are parallel in face-local space (constant local X).
  */
 export function computeVerticalSubdivisions(
   landmarks: Landmark[],
@@ -27,7 +27,10 @@ export function computeVerticalSubdivisions(
   fit: ImageFit,
   top: Point2D,
   bottom: Point2D,
+  frame?: FaceFrame,
 ): VerticalSubdivisionsGeometry {
+  const face = frame ?? buildFaceFrame(landmarks, pose, image, fit);
+
   const toC = (id: Parameters<typeof requireLm>[1], fb: Point2D) =>
     normalizedToCanvas(requireLm(landmarks, id, fb), image, fit);
 
@@ -38,10 +41,6 @@ export function computeVerticalSubdivisions(
   const leftCheek = toC('leftCheek', { x: 0.28, y: 0.55 });
   const rightCheek = toC('rightCheek', { x: 0.72, y: 0.55 });
 
-  const across = faceAcrossAxis(pose);
-  const down = faceDownAxis(pose);
-
-  // Facial width from temples / cheeks projected onto across-axis
   const leftEdge = {
     x: (leftTemple.x + leftCheek.x) / 2,
     y: (leftTemple.y + leftCheek.y) / 2,
@@ -51,71 +50,47 @@ export function computeVerticalSubdivisions(
     y: (rightTemple.y + rightCheek.y) / 2,
   };
 
-  const facialWidth = Math.hypot(
-    rightEdge.x - leftEdge.x,
-    rightEdge.y - leftEdge.y,
+  const localLeft = toLocal(face, leftEdge);
+  const localRight = toLocal(face, rightEdge);
+  const localTop = toLocal(face, top);
+  const localBottom = toLocal(face, bottom);
+
+  const facialWidth = Math.abs(localRight.x - localLeft.x);
+  const eyeWidth = Math.abs(
+    toLocal(face, rightOuter).x - toLocal(face, leftOuter).x,
   );
-  const unit = facialWidth / 5;
 
-  const projected = Math.abs(pose.yaw) > 12;
+  const projected = Math.abs(pose.yaw) > DEFAULT_ORIENTATION_CONFIG.yawFrontalDeg;
+  const u = projected
+    ? facialWidth / 5
+    : ((facialWidth / 5 + eyeWidth / 5) / 2) || facialWidth / 5;
 
-  // Eye width as cross-check
-  const eyeWidth = Math.hypot(
-    rightOuter.x - leftOuter.x,
-    rightOuter.y - leftOuter.y,
-  );
-  const u = projected ? unit : (facialWidth / 5 + eyeWidth / 5) / 2 || unit;
+  const yStart = Math.min(localTop.y, localBottom.y) - Math.abs(localBottom.y - localTop.y) * 0.05;
+  const yEnd = Math.max(localTop.y, localBottom.y) + Math.abs(localBottom.y - localTop.y) * 0.05;
 
-  const center = {
-    x: (leftEdge.x + rightEdge.x) / 2,
-    y: (top.y + bottom.y) / 2,
-  };
+  const leftX = Math.min(localLeft.x, localRight.x);
+  const width = facialWidth || 1;
 
-  // Four internal vertical guidelines at 1u, 2u, 3u, 4u from left edge
   const lines = [];
   for (let i = 1; i <= 4; i++) {
-    const along = add(leftEdge, scale(across, u * i));
-    // For yaw, compress spacing on the far side using perspective-ish factor
     let t = i / 5;
     if (projected) {
       const yawSign = Math.sign(pose.yaw) || 1;
-      // Compress the far half
       const compress = 1 - Math.abs(pose.yaw) / 200;
       if ((yawSign > 0 && t > 0.5) || (yawSign < 0 && t < 0.5)) {
         const local = t > 0.5 ? t - 0.5 : 0.5 - t;
-        const adjusted = 0.5 + Math.sign(t - 0.5) * local * compress;
-        t = adjusted;
+        t = 0.5 + Math.sign(t - 0.5) * local * compress;
       }
-      const pos = add(leftEdge, scale(across, facialWidth * t));
-      lines.push({
-        id: `vert-${i}`,
-        start: {
-          x: pos.x - down.x * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-          y: pos.y - down.y * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-        },
-        end: {
-          x: pos.x + down.x * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-          y: pos.y + down.y * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-        },
-        label: `V${i}`,
-      });
-    } else {
-      lines.push({
-        id: `vert-${i}`,
-        start: {
-          x: along.x - down.x * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-          y: along.y - down.y * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-        },
-        end: {
-          x: along.x + down.x * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-          y: along.y + down.y * Math.hypot(top.x - bottom.x, top.y - bottom.y) * 0.55,
-        },
-        label: `V${i}`,
-      });
     }
+    const localX = leftX + width * t;
+    const seg = verticalLineFromFrame(face, localX, yStart, yEnd);
+    lines.push({
+      id: `vert-${i}`,
+      start: seg.start,
+      end: seg.end,
+      label: `V${i}`,
+    });
   }
-
-  void center;
 
   return {
     facialWidth,

@@ -3,6 +3,7 @@ import type {
   CanvasConfig,
   DetectedFace,
   DetectionStatus,
+  FacePose,
   HistoryEntry,
   ImageTransform,
   Landmark,
@@ -24,6 +25,7 @@ import {
 import { fitImageToCanvas, fitHeadFocus } from '@/engine/image/imageFitting';
 import { convertUnit, rotatedImageSize } from '@/engine/image/imageTransform';
 import { detectFacesFromDataUrl } from '@/engine/vision/faceLandmarker';
+import { poseFromNamedLandmarks } from '@/engine/vision/poseFromNamedLandmarks';
 import { buildLoomisConstruction } from '@/engine/loomis/primaryGuides';
 import { buildMeasurements } from '@/engine/measurements/distanceCalculator';
 import {
@@ -394,21 +396,37 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ construction: null });
       return;
     }
+    // Re-estimate orientation from current landmarks so manual corrections
+    // update roll/yaw/pitch without requiring a full MediaPipe pass.
+    const landmarkPose = poseFromNamedLandmarks(state.landmarks);
     const face =
       state.faces.find((f) => f.id === state.selectedFaceId) ?? state.faces[0];
-    const pose = face?.pose ?? {
-      yaw: 0,
-      pitch: 0,
-      roll: 0,
-      classification: 'uncertain' as const,
-    };
+
+    // Keep matrix-informed yaw/pitch from detection when landmarks haven't
+    // been manually edited heavily; always use landmark roll (deadzoned).
+    const hasManual = state.landmarks.some((l) => l.manual);
+    let pose: FacePose = landmarkPose;
+    if (face?.pose && !hasManual) {
+      pose = {
+        ...landmarkPose,
+        yaw: face.pose.yaw * 0.65 + landmarkPose.yaw * 0.35,
+        pitch: face.pose.pitch * 0.65 + landmarkPose.pitch * 0.35,
+        classification: landmarkPose.classification,
+      };
+    }
+
+    // Persist refreshed pose onto the selected face for the UI
+    const faces = state.faces.map((f) =>
+      f.id === (state.selectedFaceId ?? face?.id) ? { ...f, pose } : f,
+    );
+
     const construction = buildLoomisConstruction(
       state.landmarks,
       pose,
       state.getImageSize(),
       state.getFit(),
     );
-    set({ construction });
+    set({ construction, faces });
   },
 
   pushHistory: () => {

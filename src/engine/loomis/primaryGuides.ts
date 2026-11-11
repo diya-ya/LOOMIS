@@ -9,15 +9,24 @@ import { computeCranialSphere } from '@/engine/geometry/cranialSphere';
 import { computeSidePlane } from '@/engine/geometry/sidePlane';
 import { computeCenterline } from '@/engine/geometry/centerline';
 import { computeFacialDivisions } from '@/engine/geometry/facialDivisions';
+import { buildFaceFrame } from '@/engine/geometry/faceFrame';
 import { computeEyeGuides } from './eyeGuides';
 import { computeMouthGuides } from './mouthGuides';
 import { computeVerticalSubdivisions } from './verticalSubdivisions';
 import { computeJawConstruction } from './jawConstruction';
 import { mid } from '@/engine/geometry/helpers';
 
+type PoseWithConfidence = FacePose & {
+  rollConfidence?: number;
+  yawConfidence?: number;
+  pitchConfidence?: number;
+  rawRoll?: number;
+  notes?: string[];
+};
+
 /**
  * Orchestrate full Loomis construction from landmarks + pose.
- * All output geometry is in physical canvas coordinates.
+ * Builds a single FaceFrame first so all guides share one orientation.
  */
 export function buildLoomisConstruction(
   landmarks: Landmark[],
@@ -26,6 +35,7 @@ export function buildLoomisConstruction(
   fit: ImageFit,
 ): LoomisConstruction {
   const warnings: string[] = [];
+  const poseEx = pose as PoseWithConfidence;
 
   if (landmarks.length === 0) {
     warnings.push('No landmarks available — construction cannot be generated.');
@@ -46,19 +56,41 @@ export function buildLoomisConstruction(
     );
   }
 
-  const sphere = computeCranialSphere(landmarks, pose, image, fit);
+  if (poseEx.rollConfidence !== undefined && poseEx.rollConfidence < 0.55) {
+    warnings.push(
+      'Orientation confidence is low — construction may be misleading. Correct landmarks manually.',
+    );
+  }
+
+  if (poseEx.notes?.length) {
+    for (const note of poseEx.notes) {
+      if (
+        note.includes('low') ||
+        note.includes('disagreed') ||
+        note.includes('Rejected')
+      ) {
+        warnings.push(note);
+      }
+    }
+  }
+
+  // One shared frame for the entire construction
+  const frame = buildFaceFrame(landmarks, pose, image, fit);
+
+  const sphere = computeCranialSphere(landmarks, pose, image, fit, frame);
   const halfWidth = sphere.radiusX * 0.95;
 
-  const sidePlane = computeSidePlane(landmarks, pose, sphere, image, fit);
+  const sidePlane = computeSidePlane(landmarks, pose, sphere, image, fit, frame);
   if (sidePlane.warning) warnings.push(sidePlane.warning);
 
-  const centerline = computeCenterline(landmarks, pose, image, fit);
+  const centerline = computeCenterline(landmarks, pose, image, fit, frame);
   const divisions = computeFacialDivisions(
     landmarks,
     pose,
     image,
     fit,
     halfWidth,
+    frame,
   );
 
   if (!divisions.equalDivision) {
@@ -67,13 +99,21 @@ export function buildLoomisConstruction(
     );
   }
 
-  const eyeGuides = computeEyeGuides(landmarks, pose, image, fit, halfWidth);
+  const eyeGuides = computeEyeGuides(
+    landmarks,
+    pose,
+    image,
+    fit,
+    halfWidth,
+    frame,
+  );
   const mouthGuides = computeMouthGuides(
     landmarks,
     pose,
     image,
     fit,
     halfWidth,
+    frame,
   );
 
   const top = mid(divisions.hairline.start, divisions.hairline.end);
@@ -86,6 +126,7 @@ export function buildLoomisConstruction(
     fit,
     top,
     bottom,
+    frame,
   );
 
   if (verticalSubdivisions.projected) {

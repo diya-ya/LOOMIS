@@ -77,8 +77,15 @@ export type Landmark = {
 export type FacePose = {
   yaw: number;
   pitch: number;
+  /** Applied in-plane roll after deadzone / robust estimation (degrees). */
   roll: number;
   classification: FaceOrientationClass;
+  /** Raw roll before deadzone, when available. */
+  rawRoll?: number;
+  rollConfidence?: number;
+  yawConfidence?: number;
+  pitchConfidence?: number;
+  notes?: string[];
 };
 
 export type DetectedFace = {

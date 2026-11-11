@@ -6,12 +6,14 @@ import type {
   Size2D,
   ImageFit,
 } from '@/types';
-import { faceAcrossAxis, faceDownAxis, requireLm } from './helpers';
+import { requireLm } from './helpers';
 import { normalizedToCanvas } from '@/engine/image/imageTransform';
+import { buildFaceFrame, type FaceFrame } from './faceFrame';
+import { DEFAULT_ORIENTATION_CONFIG } from '@/engine/vision/orientationConfig';
 
 /**
- * Estimate the side plane of the head — the transition between
- * frontal facial plane and cranial side.
+ * Estimate the side plane of the head using the shared face frame.
+ * Visibility is driven by yaw only — not by roll.
  */
 export function computeSidePlane(
   landmarks: Landmark[],
@@ -19,10 +21,13 @@ export function computeSidePlane(
   sphere: CranialSphereGeometry,
   image: Size2D,
   fit: ImageFit,
+  frame?: FaceFrame,
 ): SidePlaneGeometry {
+  const face = frame ?? buildFaceFrame(landmarks, pose, image, fit);
   const absYaw = Math.abs(pose.yaw);
+  const frontalThresh = DEFAULT_ORIENTATION_CONFIG.yawFrontalDeg * 0.65;
 
-  if (absYaw < 8) {
+  if (absYaw < frontalThresh) {
     return {
       visible: false,
       edge: {
@@ -55,12 +60,10 @@ export function computeSidePlane(
   const brow = toC('browCenter', { x: 0.5, y: 0.38 });
   const chin = toC('chin', { x: 0.5, y: 0.85 });
   const noseTip = toC('noseTip', { x: 0.5, y: 0.55 });
-  const down = faceDownAxis(pose);
-  const across = faceAcrossAxis(pose);
 
-  // Side plane sits on the far side of the turn
   const sideSign = pose.yaw >= 0 ? -1 : 1;
   const planeOffset = sphere.radiusX * (0.35 + absYaw / 120);
+  const { across, down } = face;
 
   const top = {
     x: sphere.center.x + across.x * sideSign * planeOffset - down.x * sphere.radiusY * 0.85,
@@ -79,8 +82,6 @@ export function computeSidePlane(
     y: chin.y + across.y * sideSign * planeOffset * 0.2,
   };
 
-  const contour = [top, browEdge, cheekEdge, jawEdge];
-
   return {
     visible: true,
     edge: {
@@ -89,7 +90,7 @@ export function computeSidePlane(
       end: jawEdge,
       label: 'Side plane',
     },
-    contour,
+    contour: [top, browEdge, cheekEdge, jawEdge],
     warning:
       absYaw > 40
         ? 'Strong turn — side plane is an approximation. Verify against your reference.'

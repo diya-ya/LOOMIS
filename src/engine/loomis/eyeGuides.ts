@@ -5,16 +5,28 @@ import type {
   Size2D,
   ImageFit,
 } from '@/types';
-import { mid, orientedCrossLine, requireLm } from '@/engine/geometry/helpers';
+import { mid, requireLm } from '@/engine/geometry/helpers';
 import { normalizedToCanvas } from '@/engine/image/imageTransform';
+import {
+  buildFaceFrame,
+  crossLineFromFrame,
+  type FaceFrame,
+} from '@/engine/geometry/faceFrame';
 
+/**
+ * Eye guides follow eyelid landmark heights but share the face frame
+ * orientation (parallel to primary divisions) — not per-eye slopes.
+ */
 export function computeEyeGuides(
   landmarks: Landmark[],
   pose: FacePose,
   image: Size2D,
   fit: ImageFit,
   halfWidth: number,
+  frame?: FaceFrame,
 ): EyeGuidesGeometry {
+  const face = frame ?? buildFaceFrame(landmarks, pose, image, fit);
+
   const toC = (id: Parameters<typeof requireLm>[1], fb: { x: number; y: number }) =>
     normalizedToCanvas(requireLm(landmarks, id, fb), image, fit);
 
@@ -26,8 +38,8 @@ export function computeEyeGuides(
   const upperMid = mid(leftUpper, rightUpper);
   const lowerMid = mid(leftLower, rightLower);
 
-  const upper = orientedCrossLine(upperMid, halfWidth * 0.95, pose);
-  const lower = orientedCrossLine(lowerMid, halfWidth * 0.95, pose);
+  const upper = crossLineFromFrame(face, upperMid, halfWidth * 0.95);
+  const lower = crossLineFromFrame(face, lowerMid, halfWidth * 0.95);
 
   return {
     upper: { id: 'eye-upper', ...upper, label: 'Upper eyelid' },
